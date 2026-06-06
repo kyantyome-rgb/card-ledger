@@ -1,0 +1,19 @@
+{
+  "name": "card-ledger",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "カード明細をDB化し検索・仕訳集計・期間集計を行う家計管理PWA",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/google.accounts": "^0.0.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vite-plugin-pwa": "^0.20.5"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Claude Code / エディタ等のローカル設定（アプリ本体ではない）
+settings.json
+.claude/
