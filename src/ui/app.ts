@@ -929,9 +929,27 @@ function viewSettings(): string {
         </div>
       </div>
       <div class="card p-4 space-y-2">
-        <div class="font-bold">データ</div>
+        <div class="font-bold">データ（スプレッドシート）</div>
         ${sheetUrl ? `<a href="${sheetUrl}" target="_blank" rel="noopener" class="text-brand-600 font-bold text-sm underline break-all">スプレッドシートを開く ↗</a>` : '<div class="text-sm text-slate-400">未接続</div>'}
         <div class="text-[11px] text-slate-400">明細 ${state.tx.length}件 ・ ポイント ${state.pts.length}件 ・ カテゴリ ${state.cats.length}種</div>
+        ${
+          state.id
+            ? `<div class="mt-1">
+                 <div class="text-[11px] font-bold text-slate-400">現在のスプレッドシートID</div>
+                 <div class="flex gap-2 mt-1">
+                   <input id="curSheetId" readonly value="${esc(state.id)}" class="flex-1 px-2 py-1.5 rounded-lg border border-slate-200 text-[11px] bg-slate-50 text-slate-600">
+                   <button id="copyIdBtn" class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-bold text-xs">コピー</button>
+                 </div>
+               </div>`
+            : ''
+        }
+      </div>
+
+      <div class="card p-4 space-y-2">
+        <div class="font-bold">別の端末と同じデータを使う</div>
+        <p class="text-[11px] text-slate-400">端末ごとに別のスプレッドシートが作られます。同じデータを見るには、最初の端末の「スプレッドシートID」をここに貼り付けて接続してください（IDでもURLでもOK）。</p>
+        <input id="linkSheetId" placeholder="スプレッドシートIDまたはURL" class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm outline-none focus:border-brand-400">
+        <button id="linkSheetBtn" class="px-4 py-2 rounded-xl bg-brand-500 text-white font-bold text-sm">このシートに接続</button>
       </div>
       <div class="card p-4">
         <button id="signOutBtn" class="px-4 py-2 rounded-xl bg-coral/10 text-coral font-bold text-sm">ログアウト</button>
@@ -956,10 +974,36 @@ function wireSettings(): void {
     toast('Gemini キーを削除しました');
     render();
   });
+  document.getElementById('copyIdBtn')?.addEventListener('click', () => {
+    void navigator.clipboard?.writeText(state.id).then(() => toast('IDをコピーしました'));
+  });
+  document.getElementById('linkSheetBtn')?.addEventListener('click', () => {
+    const v = (document.getElementById('linkSheetId') as HTMLInputElement | null)?.value;
+    if (v) void switchSpreadsheet(v);
+  });
   document.getElementById('signOutBtn')?.addEventListener('click', () => {
     signOut();
     location.reload();
   });
+}
+
+/** 指定スプレッドシート（IDまたはURL）に接続し直す */
+async function switchSpreadsheet(input: string): Promise<void> {
+  const raw = input.trim();
+  const m = raw.match(/\/d\/([a-zA-Z0-9-_]+)/);
+  const sid = m && m[1] ? m[1] : raw;
+  if (!sid) return;
+  const prev = localStorage.getItem(LS.spreadsheetId);
+  try {
+    localStorage.setItem(LS.spreadsheetId, sid);
+    await bootstrap(); // ensureWorkbook で存在確認・不足シート補完 → loadAll → 再描画
+    toast('スプレッドシートに接続しました');
+  } catch (e) {
+    // 失敗したら元のIDに戻す
+    if (prev) localStorage.setItem(LS.spreadsheetId, prev);
+    else localStorage.removeItem(LS.spreadsheetId);
+    toast('接続に失敗: ' + errMsg(e));
+  }
 }
 
 // ============================ DEV デモ（OAuth/Sheets を使わず画面確認） ============================
