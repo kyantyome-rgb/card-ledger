@@ -12,6 +12,7 @@ import {
   appendValues,
   updateValues,
   clearValues,
+  batchUpdateValues,
   createSpreadsheet,
   getSheetTitles,
   addSheets,
@@ -155,6 +156,26 @@ export async function setTransactionCategory(
   if (idx < 0) return;
   const rowNumber = idx + 2; // ヘッダ分+1、0始まり補正+1
   await updateValues(id, `${SHEET.transactions}!I${rowNumber}`, [[category]]);
+}
+
+/** 複数の取引のカテゴリを一括更新（取引番号→行を1回の読み取りで解決し batchUpdate） */
+export async function setTransactionCategories(
+  id: string,
+  updates: { txId: string; category: string }[],
+): Promise<void> {
+  if (updates.length === 0) return;
+  const ids = await getValues(id, `${SHEET.transactions}!A2:A`);
+  const rowByTx = new Map<string, number>();
+  ids.forEach((r, i) => {
+    const v = str(r[0]);
+    if (v) rowByTx.set(v, i + 2);
+  });
+  const data: { range: string; values: CellValue[][] }[] = [];
+  for (const u of updates) {
+    const row = rowByTx.get(u.txId);
+    if (row) data.push({ range: `${SHEET.transactions}!I${row}`, values: [[u.category]] });
+  }
+  await batchUpdateValues(id, data);
 }
 
 /** ルール全体を書き換え（学習・追加の反映） */

@@ -75,6 +75,16 @@ export async function clearValues(spreadsheetId: string, range: string): Promise
   await request('POST', url, {});
 }
 
+/** 複数範囲を1リクエストで更新（一括カテゴリ変更などに使用） */
+export async function batchUpdateValues(
+  spreadsheetId: string,
+  data: { range: string; values: CellValue[][] }[],
+): Promise<void> {
+  if (data.length === 0) return;
+  const url = `${SHEETS_API}/${spreadsheetId}/values:batchUpdate`;
+  await request('POST', url, { valueInputOption: 'RAW', data });
+}
+
 interface CreateResponse {
   spreadsheetId: string;
 }

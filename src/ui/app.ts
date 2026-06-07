@@ -6,6 +6,7 @@ import {
   appendTransactions,
   appendPoints,
   setTransactionCategory,
+  setTransactionCategories,
   saveRules,
   saveCategories,
 } from '../sheets/repo';
@@ -73,6 +74,10 @@ const search: SearchState = { keyword: '', category: '', year: new Date().getFul
 
 // ポイント履歴で表示中の年
 let pointsYear = new Date().getFullYear();
+
+// 仕訳編集のキーワード絞り込みと複数選択
+const journalFilter = { keyword: '' };
+const journalSelected = new Set<string>();
 
 const app = (): HTMLElement => {
   const el = document.getElementById('app');
@@ -664,10 +669,21 @@ function wirePoints(): void {
 
 // ============================ 仕訳編集 ============================
 
-function viewJournal(): string {
+/** 仕訳編集の対象リスト（キーワードあり=全明細から、なし=未分類優先） */
+function journalBase(): { list: Transaction[]; uncatsCount: number; mode: string } {
   const uncats = state.tx.filter((t) => t.category === UNCLASSIFIED);
-  const list = uncats.length ? uncats : state.tx;
+  const kw = journalFilter.keyword.trim();
+  if (kw) {
+    return { list: state.tx.filter((t) => t.merchant.includes(kw)), uncatsCount: uncats.length, mode: `「${kw}」の検索結果` };
+  }
+  const base = uncats.length ? uncats : state.tx;
+  return { list: base, uncatsCount: uncats.length, mode: uncats.length ? '未分類・要確認' : 'すべての明細' };
+}
+
+function viewJournal(): string {
+  const { list, uncatsCount, mode } = journalBase();
   const pg = paginate(list, pageState.journal);
+  const allSelected = list.length > 0 && list.every((t) => journalSelected.has(t.txId));
   const opts = (sel: string): string =>
     [UNCLASSIFIED, ...state.cats.map((c) => c.name)]
       .map((c) => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`)
@@ -675,22 +691,42 @@ function viewJournal(): string {
   return `
     <section class="space-y-4 animate-pop">
       <h1 class="text-2xl font-extrabold">仕訳編集 🏷️</h1>
-      <div class="card p-4">
-        <div class="flex items-center justify-between mb-3">
-          <div class="font-bold">${uncats.length ? '未分類・要確認' : 'すべての明細'}</div>
-          <span class="chip bg-coral/15 text-coral">${uncats.length}件 未分類</span>
+      <div class="card p-4 space-y-3">
+        <input id="jKw" value="${esc(journalFilter.keyword)}" placeholder="🔍 店舗名で検索（全明細から）" class="w-full px-3 py-2 rounded-xl border border-slate-200 outline-none focus:border-brand-400 text-sm">
+        <div class="flex items-center justify-between">
+          <div class="font-bold text-sm">${esc(mode)}</div>
+          <div class="flex items-center gap-2">
+            <span class="chip bg-coral/15 text-coral">${uncatsCount}件 未分類</span>
+            ${list.length ? `<button id="selAllBtn" class="text-xs font-bold text-brand-600">${allSelected ? '選択解除' : '全件選択'}</button>` : ''}
+          </div>
         </div>
-        <div class="space-y-2">
+        ${
+          journalSelected.size
+            ? `<div class="rounded-xl bg-brand-50 border border-brand-200 p-2 flex items-center gap-2">
+                 <span class="text-sm font-bold text-brand-700 whitespace-nowrap">${journalSelected.size}件</span>
+                 <select id="bulkCat" class="flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-slate-200 text-sm outline-none">
+                   <option value="">カテゴリを選択…</option>
+                   ${[UNCLASSIFIED, ...state.cats.map((c) => c.name)].map((c) => `<option>${esc(c)}</option>`).join('')}
+                 </select>
+                 <button id="bulkApplyBtn" class="px-3 py-1.5 rounded-lg bg-brand-500 text-white font-bold text-sm whitespace-nowrap">一括適用</button>
+                 <button id="bulkClearBtn" class="px-2 py-1.5 rounded-lg bg-slate-100 text-slate-500 text-xs whitespace-nowrap">解除</button>
+               </div>`
+            : ''
+        }
+        <div class="space-y-1">
           ${pg.items
-            .map(
-              (t) => `
-            <div class="flex items-center gap-2 p-2 rounded-xl hover:bg-slate-50">
-              <div class="w-8 h-8 rounded-lg grid place-items-center" style="background:${catStyle(t.category, state.cats).color}22">${catStyle(t.category, state.cats).icon}</div>
+            .map((t) => {
+              const s = catStyle(t.category, state.cats);
+              const on = journalSelected.has(t.txId);
+              return `
+            <div class="flex items-center gap-2 p-1.5 rounded-xl ${on ? 'bg-brand-50' : 'hover:bg-slate-50'}">
+              <input type="checkbox" data-sel="${esc(t.txId)}" ${on ? 'checked' : ''} class="w-4 h-4 accent-brand-500 shrink-0">
+              <div class="w-7 h-7 rounded-lg grid place-items-center text-sm shrink-0" style="background:${s.color}22">${s.icon}</div>
               <div class="flex-1 min-w-0"><div class="font-semibold truncate text-sm">${esc(t.merchant)}</div><div class="text-[11px] text-slate-400">${t.date} ・ ${yen(t.amount)}</div></div>
-              <select data-cat-for="${esc(t.txId)}" class="px-2 py-1.5 rounded-lg border border-slate-200 text-sm outline-none focus:border-brand-400">${opts(t.category)}</select>
-            </div>`,
-            )
-            .join('') || emptyNote('明細がありません。')}
+              <select data-cat-for="${esc(t.txId)}" class="px-1.5 py-1 rounded-lg border border-slate-200 text-xs outline-none focus:border-brand-400 shrink-0">${opts(t.category)}</select>
+            </div>`;
+            })
+            .join('') || emptyNote('該当する明細がありません。')}
         </div>
         ${pagerHtml('journal', pg)}
       </div>
@@ -722,6 +758,7 @@ function viewJournal(): string {
 }
 
 function wireJournal(): void {
+  // 行ごとのカテゴリ変更（単体）
   app()
     .querySelectorAll<HTMLSelectElement>('[data-cat-for]')
     .forEach((sel) =>
@@ -730,12 +767,78 @@ function wireJournal(): void {
         if (txId) void changeCategory(txId, sel.value);
       }),
     );
+  // 複数選択チェックボックス
+  app()
+    .querySelectorAll<HTMLInputElement>('[data-sel]')
+    .forEach((cb) =>
+      cb.addEventListener('change', () => {
+        const id = cb.dataset.sel;
+        if (!id) return;
+        if (cb.checked) journalSelected.add(id);
+        else journalSelected.delete(id);
+        render();
+      }),
+    );
+  // キーワード検索（確定で反映）
+  const kw = document.getElementById('jKw') as HTMLInputElement | null;
+  kw?.addEventListener('change', () => {
+    journalFilter.keyword = kw.value.trim();
+    pageState.journal = 0;
+    render();
+  });
+  // 全件選択 / 解除（絞り込み結果の全ページ対象）
+  document.getElementById('selAllBtn')?.addEventListener('click', () => {
+    const { list } = journalBase();
+    const allSelected = list.length > 0 && list.every((t) => journalSelected.has(t.txId));
+    for (const t of list) {
+      if (allSelected) journalSelected.delete(t.txId);
+      else journalSelected.add(t.txId);
+    }
+    render();
+  });
+  // 一括適用
+  document.getElementById('bulkApplyBtn')?.addEventListener('click', () => {
+    const cat = (document.getElementById('bulkCat') as HTMLSelectElement | null)?.value;
+    if (!cat) {
+      toast('カテゴリを選択してください');
+      return;
+    }
+    void bulkApplyCategory(cat);
+  });
+  document.getElementById('bulkClearBtn')?.addEventListener('click', () => {
+    journalSelected.clear();
+    render();
+  });
   document.getElementById('addCatBtn')?.addEventListener('click', () => {
     const input = document.getElementById('newCat') as HTMLInputElement | null;
     const name = input?.value.trim();
     if (name) void addCategory(name);
   });
   wirePager();
+}
+
+/** 選択中の明細をまとめて1カテゴリに変更（1リクエストで保存） */
+async function bulkApplyCategory(category: string): Promise<void> {
+  const ids = [...journalSelected];
+  if (ids.length === 0) return;
+  let rules = state.rules;
+  for (const id of ids) {
+    const t = state.tx.find((x) => x.txId === id);
+    if (t) {
+      t.category = category;
+      rules = learnFromCorrection(rules, t.merchant, category).rules;
+    }
+  }
+  state.rules = rules;
+  journalSelected.clear();
+  render();
+  try {
+    await setTransactionCategories(state.id, ids.map((txId) => ({ txId, category })));
+    await saveRules(state.id, state.rules);
+    toast(`${ids.length}件を「${category}」に変更しました`);
+  } catch (e) {
+    toast('保存に失敗: ' + errMsg(e));
+  }
 }
 
 async function changeCategory(txId: string, category: string): Promise<void> {
