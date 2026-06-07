@@ -75,8 +75,8 @@ const search: SearchState = { keyword: '', category: '', year: new Date().getFul
 // ポイント履歴で表示中の年
 let pointsYear = new Date().getFullYear();
 
-// 仕訳編集のキーワード絞り込みと複数選択
-const journalFilter = { keyword: '' };
+// 仕訳編集のキーワード/カテゴリ絞り込みと複数選択
+const journalFilter = { keyword: '', category: '' };
 const journalSelected = new Set<string>();
 
 const app = (): HTMLElement => {
@@ -673,8 +673,15 @@ function wirePoints(): void {
 function journalBase(): { list: Transaction[]; uncatsCount: number; mode: string } {
   const uncats = state.tx.filter((t) => t.category === UNCLASSIFIED);
   const kw = journalFilter.keyword.trim();
-  if (kw) {
-    return { list: state.tx.filter((t) => t.merchant.includes(kw)), uncatsCount: uncats.length, mode: `「${kw}」の検索結果` };
+  const cat = journalFilter.category;
+  if (kw || cat) {
+    const list = state.tx.filter(
+      (t) => (!kw || t.merchant.includes(kw)) && (!cat || t.category === cat),
+    );
+    const parts: string[] = [];
+    if (kw) parts.push(`「${kw}」`);
+    if (cat) parts.push(cat);
+    return { list, uncatsCount: uncats.length, mode: `${parts.join(' / ')} の検索結果` };
   }
   const base = uncats.length ? uncats : state.tx;
   return { list: base, uncatsCount: uncats.length, mode: uncats.length ? '未分類・要確認' : 'すべての明細' };
@@ -693,6 +700,12 @@ function viewJournal(): string {
       <h1 class="text-2xl font-extrabold">仕訳編集 🏷️</h1>
       <div class="card p-4 space-y-3">
         <input id="jKw" value="${esc(journalFilter.keyword)}" placeholder="🔍 店舗名で検索（全明細から）" class="w-full px-3 py-2 rounded-xl border border-slate-200 outline-none focus:border-brand-400 text-sm">
+        <select id="jCat" class="w-full px-3 py-2 rounded-xl border border-slate-200 outline-none focus:border-brand-400 text-sm">
+          <option value="">カテゴリ：すべて</option>
+          ${[UNCLASSIFIED, ...state.cats.map((c) => c.name)]
+            .map((c) => `<option ${journalFilter.category === c ? 'selected' : ''}>${esc(c)}</option>`)
+            .join('')}
+        </select>
         <div class="flex items-center justify-between">
           <div class="font-bold text-sm">${esc(mode)}</div>
           <div class="flex items-center gap-2">
@@ -783,6 +796,12 @@ function wireJournal(): void {
   const kw = document.getElementById('jKw') as HTMLInputElement | null;
   kw?.addEventListener('change', () => {
     journalFilter.keyword = kw.value.trim();
+    pageState.journal = 0;
+    render();
+  });
+  const jcat = document.getElementById('jCat') as HTMLSelectElement | null;
+  jcat?.addEventListener('change', () => {
+    journalFilter.category = jcat.value;
     pageState.journal = 0;
     render();
   });
