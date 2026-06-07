@@ -11,6 +11,135 @@
 
 ---
 
+## アーキテクチャ
+
+> 以下の図は GitHub 上でそのまま図として描画されます（Mermaid）。
+
+### 全体構成
+
+専用バックエンドを持たない **サーバーレス構成**。静的ホスティング（GitHub Pages）から配信される
+PWA が、ブラウザから直接 Google の各 API を呼び出します。家計データはユーザー自身の
+スプレッドシートにのみ保存されます。
+
+```mermaid
+flowchart TB
+  subgraph DEV["💻 開発 / CI（GitHub）"]
+    GHA["GitHub Actions<br/>npm run build"]
+    PAGES["GitHub Pages<br/>静的ホスティング (HTTPS)"]
+    GHA -->|dist/ を公開| PAGES
+  end
+
+  subgraph CLIENT["📱 端末（Android / PC ブラウザ）= PWA"]
+    APP["CardLedger 本体<br/>Vite + TypeScript"]
+    SW["Service Worker<br/>オフラインキャッシュ"]
+    LSTORE["localStorage<br/>・spreadsheetId<br/>・Gemini APIキー<br/>・AIコメント日次キャッシュ"]
+    APP <--> SW
+    APP <--> LSTORE
+  end
+
+  subgraph GOOGLE["☁️ Google"]
+    GIS["Identity Services<br/>OAuth 2.0 トークン"]
+    SHEETSAPI["Sheets API v4"]
+    SHEET[("📊 スプレッドシート<br/>transactions / points<br/>categories / rules / meta")]
+    GEMINI["Gemini API<br/>gemini-2.0-flash"]
+    SHEETSAPI <--> SHEET
+  end
+
+  PAGES ==>|配信| APP
+  APP -->|① ログイン| GIS
+  GIS -.->|アクセストークン| APP
+  APP -->|② 明細の読み書き（Bearer）| SHEETSAPI
+  APP -->|③ 月次サマリー送信| GEMINI
+  GEMINI -.->|利用傾向コメント| APP
+
+  classDef client fill:#ecfdf5,stroke:#10b981,color:#065f46;
+  classDef google fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a;
+  classDef ci fill:#fef3c7,stroke:#f59e0b,color:#78350f;
+  class APP,SW,LSTORE client;
+  class GIS,SHEETSAPI,SHEET,GEMINI google;
+  class GHA,PAGES ci;
+```
+
+### レイヤー構成（モジュール依存）
+
+副作用のない **ドメイン層** を中心に、UI・外部連携・設定を周辺に配置。
+ドメイン層は DOM や API に依存しないため単体で再利用・検証しやすい構造です。
+
+```mermaid
+flowchart TD
+  subgraph UI["🎨 UI 層"]
+    APPTS["ui/app.ts<br/>5画面 + 設定 / ボトムタブ / 状態管理"]
+    FMT["ui/format.ts"]
+  end
+  subgraph DOMAIN["🧠 ドメイン層（純粋ロジック・副作用なし）"]
+    CSV["csv.ts<br/>PayPay CSV パーサ"]
+    PRED["predict.ts<br/>カテゴリ予測・学習"]
+    AGG["aggregate.ts<br/>期間/カテゴリ/ポイント集計"]
+    TYPES["types.ts"]
+  end
+  subgraph IO["🔌 連携層（副作用あり）"]
+    GISTS["auth/gis.ts<br/>OAuth"]
+    CLIENT["sheets/client.ts<br/>Sheets REST"]
+    REPO["sheets/repo.ts<br/>スキーマ初期化 / CRUD"]
+    AITS["ai/gemini.ts"]
+  end
+  CONF["config.ts<br/>スコープ / シート定義 / 初期カテゴリ・ルール"]
+
+  APPTS --> CSV & PRED & AGG
+  APPTS --> GISTS & REPO & AITS & FMT
+  REPO --> CLIENT --> GISTS
+  REPO --> CONF
+  APPTS --> CONF
+
+  classDef ui fill:#ecfdf5,stroke:#10b981,color:#065f46;
+  classDef dom fill:#f5f3ff,stroke:#8b5cf6,color:#4c1d95;
+  classDef io fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a;
+  classDef cfg fill:#fff7ed,stroke:#f97316,color:#7c2d12;
+  class APPTS,FMT ui;
+  class CSV,PRED,AGG,TYPES dom;
+  class GISTS,CLIENT,REPO,AITS io;
+  class CONF cfg;
+```
+
+### データインポートの流れ
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as ユーザー
+  participant UI as 取込画面 (app.ts)
+  participant CSV as csv.ts
+  participant PR as predict.ts
+  participant RP as repo.ts
+  participant SH as Sheets API
+
+  U->>UI: PayPay CSV を選択
+  UI->>CSV: parsePayPayCsv()（Shift_JIS で読込）
+  Note right of CSV: 「支払い」→ 明細<br/>「ポイント獲得」→ ポイント<br/>取引番号でファイル内重複を除去
+  CSV-->>UI: 明細[] / ポイント[]
+  UI->>PR: predictCategory()（ルール辞書で自動分類）
+  UI->>UI: 既存データと取引番号で重複判定
+  UI-->>U: プレビュー（新規 / 重複 / 自動分類 / ポイント）
+  U->>UI: 「登録（新規のみ）」
+  UI->>RP: appendTransactions() / appendPoints()
+  RP->>SH: values.append
+  SH-->>RP: OK
+  UI-->>U: ホームへ反映
+```
+
+### 主な画面
+
+| 画面 | 役割 |
+| --- | --- |
+| 🏠 ホーム | 年間サマリー・月別/カテゴリ別チャート・獲得ポイント・AIコメント |
+| 🔍 検索 | キーワード/カテゴリ/年/月で絞り込み＋結果のカテゴリ別集計（100件ページング） |
+| 🪙 ポイント | 年セレクタによる年単位集計・月別チャート・履歴（100件ページング） |
+| 🏷️ 仕訳 | 未分類の手修正（→ルール学習）・カテゴリマスタ・ルール辞書 |
+| 📥 取込 | CSV取込・重複判定・自動分類プレビュー・登録 |
+| ⚙️ 設定 | Geminiキー・スプレッドシート接続（端末間共有）・ログアウト |
+
+---
+
 ## 1. 必要なもの
 
 | 項目 | 内容 |
