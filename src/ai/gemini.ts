@@ -1,7 +1,23 @@
 import { LS } from '../config';
 
-const MODEL = 'gemini-2.0-flash';
-const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+const MODEL_PRIMARY = 'gemini-3.5-flash-lite';
+const MODEL_FALLBACK = 'gemini-3.8-flash';
+const endpointOf = (model: string): string =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+class GeminiHttpError extends Error {
+  constructor(
+    readonly status: number,
+    body: string,
+  ) {
+    super(`Gemini API ${status}: ${body}`);
+    this.name = 'GeminiHttpError';
+  }
+}
+
+/** モデル廃止(404)・無料枠上限(429)・サーバ障害(5xx)のみ別モデルで再試行する */
+const isRetryable = (e: unknown): boolean =>
+  e instanceof GeminiHttpError && (e.status === 404 || e.status === 429 || e.status >= 500);
 
 /** 月次サマリー（集計結果から組み立てて渡す） */
 export interface AiSummary {
@@ -67,27 +83,37 @@ interface GeminiResponse {
   candidates?: { content?: { parts?: { text?: string }[] } }[];
 }
 
-/** Gemini を呼び出してコメントを生成（キャッシュは扱わない素の生成） */
-export async function generateInsight(summary: AiSummary): Promise<string> {
-  const key = getGeminiKey();
-  if (!key) throw new Error('Gemini API キーが未設定です（設定画面で入力してください）');
-
-  const res = await fetch(`${ENDPOINT}?key=${encodeURIComponent(key)}`, {
+async function callGemini(model: string, key: string, prompt: string): Promise<string> {
+  const res = await fetch(`${endpointOf(model)}?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: buildPrompt(summary) }] }],
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.7, maxOutputTokens: 256 },
     }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Gemini API ${res.status}: ${text}`);
+    throw new GeminiHttpError(res.status, text);
   }
   const data = (await res.json()) as GeminiResponse;
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
   if (!text) throw new Error('Gemini からの応答が空でした');
   return text;
+}
+
+/** Gemini を呼び出してコメントを生成（キャッシュは扱わない素の生成） */
+export async function generateInsight(summary: AiSummary): Promise<string> {
+  const key = getGeminiKey();
+  if (!key) throw new Error('Gemini API キーが未設定です（設定画面で入力してください）');
+  const prompt = buildPrompt(summary);
+
+  try {
+    return await callGemini(MODEL_PRIMARY, key, prompt);
+  } catch (e) {
+    if (!isRetryable(e)) throw e;
+    return callGemini(MODEL_FALLBACK, key, prompt);
+  }
 }
 
 /**
